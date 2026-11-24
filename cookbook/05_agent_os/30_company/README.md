@@ -256,6 +256,11 @@ has `notes/`: the same store in the AgentOS database holds it. The wiki API abov
 serves the same pages. A deployment upgraded from 3.2.0 runs the 3.2.3 migration,
 which moves each file to its tree path.
 
+**On the File System page.** With Company on, the Company file system is one entry
+of the page: namespace `company`, with `wiki/`, `goals/`, `tasks/` and `notes/` under
+it. `GET /filesystem/namespaces` lists it, and `filesystem:read` is enough to browse
+it there. The Company routes above keep their own scopes.
+
 **Nothing in the tree is isolated by user.** `notes/` is one folder shared by
 everyone who talks to Super Agent, including when user isolation is on. A note
 Super Agent saved in one person's chat can be read in another person's chat.
