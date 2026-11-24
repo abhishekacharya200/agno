@@ -580,6 +580,10 @@ class AgentOS:
                 company = replace(company, goals=self.config.company.goals)
         self.company = company
         self._company_db = (company.db if company.db is not None else db) if company is not None else None
+        if company is not None and self._company_db is not None:
+            from agno.company.filesystem import set_company_filesystem_bytes
+
+            set_company_filesystem_bytes(self._company_db, company.max_filesystem_bytes)
         self.checkpoint = checkpoint
 
         self.telemetry = telemetry
