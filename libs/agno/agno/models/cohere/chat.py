@@ -68,6 +68,9 @@ class Cohere(Model):
 
         _client_params["api_key"] = self.api_key
 
+        if self.client_params:
+            _client_params.update(self.client_params)
+
         if self.http_client:
             if isinstance(self.http_client, httpx.Client):
                 _client_params["httpx_client"] = self.http_client
@@ -96,6 +99,9 @@ class Cohere(Model):
             )
 
         _client_params["api_key"] = self.api_key
+
+        if self.client_params:
+            _client_params.update(self.client_params)
 
         if self.http_client:
             if isinstance(self.http_client, httpx.AsyncClient):
