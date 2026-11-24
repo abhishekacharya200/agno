@@ -68,7 +68,7 @@ from agno.db.migrations.utils import quote_db_identifier
 from agno.db.schemas.goals import goal_metadata
 from agno.db.schemas.scheduler import COMPANY_AUTOMATION_SCHEDULE_ID
 from agno.db.utils import LEGACY_GOALS_TABLE_NAME
-from agno.utils.log import log_info
+from agno.utils.log import log_info, log_warning
 
 try:
     from sqlalchemy import JSON, column, select, table, text, update
@@ -778,6 +778,34 @@ def _move(conn: Any, files: Any, folders: Dict[str, str], defaults: Dict[str, Di
     return moved
 
 
+def _over_the_write_limit(conn: Any, files: Any, folders: Dict[str, str]) -> List[str]:
+    """The paths that, once inside their folder, are longer than a write accepts.
+
+    A page written through the wiki API could be as deep as a path may be. Its folder's name now
+    comes first, so its stored path can be deeper. It is read and listed as it is.
+    """
+    from sqlalchemy import func, or_
+
+    from agno.fs._paths import MAX_PATH_CHARS, MAX_SEGMENTS, exceeds_write_limits
+
+    found: List[str] = []
+    for namespace, folder in folders.items():
+        prefix = f"{folder}/"
+        query = select(files.c.path).where(files.c.namespace == namespace)
+        # A folder whose own name is too long puts every file in it over the limit.
+        if not exceeds_write_limits(folder):
+            names = func.length(files.c.path) - func.length(func.replace(files.c.path, "/", "")) + 1
+            query = query.where(
+                or_(
+                    func.length(files.c.path) > MAX_PATH_CHARS - len(prefix),
+                    names > MAX_SEGMENTS - prefix.count("/"),
+                )
+            )
+        rows = conn.execute(query).all()
+        found.extend(f"{prefix}{row[0]}" for row in rows if exceeds_write_limits(f"{prefix}{row[0]}"))
+    return sorted(found)
+
+
 def _move_company_files(sess: Any, db: Any) -> bool:
     """Move the Company files of the session's database into the Company file system.
 
@@ -792,8 +820,15 @@ def _move_company_files(sess: Any, db: Any) -> bool:
     if not namespaces:
         return False
     folders, defaults = _folders(namespaces, *_goals_and_tasks(sess, db, namespaces))
+    too_long = _over_the_write_limit(conn, files, folders)
     moved = _move(conn, files, folders, defaults)
     log_info(f"Moved {moved} Company files into the Company file system")
+    if too_long:
+        shown = ", ".join(too_long[:20]) + (f" and {len(too_long) - 20} more" if len(too_long) > 20 else "")
+        log_warning(
+            f"{len(too_long)} Company files are now stored at a path longer than a write accepts: {shown}. "
+            "They are read and listed as they are. To change one, move it to a shorter path."
+        )
     return True
 
 

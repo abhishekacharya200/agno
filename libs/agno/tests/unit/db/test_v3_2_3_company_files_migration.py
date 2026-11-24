@@ -533,6 +533,54 @@ def test_a_subclassed_adapter_has_its_files_and_notes_moved(tmp_path, is_async):
     company_reader.db_engine.dispose()
 
 
+def test_the_migration_reports_each_path_that_ends_up_over_the_write_limit(databases, caplog):
+    import logging
+
+    from agno.fs._paths import MAX_PATH_CHARS, MAX_SEGMENTS, exceeds_write_limits
+    from agno.fs.errors import InvalidPathError
+
+    db, reader = databases.new()
+    manager = CompanyManager(reader)
+    goal = manager.create(name="Launch")
+    store = company_filesystem(reader)
+    for meta in store.list():
+        store.delete(meta.path)
+    # As deep and as long as the wiki API of 3.2.0 accepts: fine in its own namespace, too long once inside a folder.
+    deep = "/".join(f"d{index}" for index in range(MAX_SEGMENTS - 1)) + "/page.md"
+    long = "/".join(["x" * 120] * 4) + "/page.md"
+    assert len(deep.split("/")) == MAX_SEGMENTS and MAX_PATH_CHARS - 40 < len(long) <= MAX_PATH_CHARS
+    wiki = FileSystem(reader, namespace="company/wiki", user_scoped=False)
+    wiki.write(deep, "Deep")
+    wiki.write("brief.md", "Fits")
+    pages = FileSystem(reader, namespace=f"company/products/{goal['id']}/wiki", user_scoped=False)
+    pages.write(long, "Long")
+    pages.write("a/b/research.md", "Fits")
+    FileSystem(reader, namespace="company/notes", user_scoped=False).write("ideas.md", "Fits")
+
+    with caplog.at_level(logging.WARNING):
+        assert databases.run(move_company_files, amove_company_files, db) is True
+
+    over = [f"goals/{goal['id']}/{long}", f"wiki/{deep}"]
+    assert all(exceeds_write_limits(path) for path in over)
+    reports = [record.getMessage() for record in caplog.records if "longer than a write accepts" in record.getMessage()]
+    assert len(reports) == 1 and reports[0].startswith("2 Company files")
+    assert all(path in reports[0] for path in over)
+    assert "brief.md" not in reports[0] and "research.md" not in reports[0] and "ideas.md" not in reports[0]
+    # Each is stored, read and listed whatever its length. Only a write of such a path is refused.
+    stored = rows(reader)
+    assert stored[("company", over[0])][0] == "Long" and stored[("company", over[1])][0] == "Deep"
+    whole = company_filesystem(reader)
+    assert whole.read(over[0]) == "Long" and whole.read(over[1]) == "Deep"
+    assert sorted(meta.path for meta in whole.list("wiki")) == sorted(["wiki/brief.md", over[1]])
+    with pytest.raises(InvalidPathError):
+        whole.write(over[1], "Changed")
+    # A second run has nothing to move and nothing to report.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert databases.run(move_company_files, amove_company_files, db) is False
+    assert not [record for record in caplog.records if "longer than a write accepts" in record.getMessage()]
+
+
 def test_the_folder_of_a_namespace_uses_the_id_of_its_record():
     namespaces = [
         "company/wiki",
